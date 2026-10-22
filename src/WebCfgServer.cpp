@@ -3954,6 +3954,10 @@ bool WebCfgServer::processArgs(PsychicRequest *request, PsychicResponse* resp, S
         bool v = isParameterTrue(request, "AUTHPER");
         _preferences->putBool(preference_auth_topic_per_entry, v);
     }
+    if(request->hasParam("AUTHACT"))
+    {
+        _preferences->putBool(preference_auth_activity_enabled, isParameterTrue(request, "AUTHACT"));
+    }
     if(request->hasParam("AUTHENA"))
     {
         bool v = isParameterTrue(request, "AUTHENA");
@@ -5809,6 +5813,7 @@ esp_err_t WebCfgServer::buildAccLvlHtml(PsychicRequest *request, PsychicResponse
     printCheckBox(&response, "TCENA", "Add, modify and delete time control entries", _preferences->getBool(preference_timecontrol_control_enabled), "");
     printCheckBox(&response, "AUTHPUB", "Publish authorization entries information", _preferences->getBool(preference_auth_info_enabled), "");
     printCheckBox(&response, "AUTHPER", "Publish a topic per authorization entry and create HA sensor", _preferences->getBool(preference_auth_topic_per_entry), "");
+    printCheckBox(&response, "AUTHACT", "Create HA activity diagnostics for log-only authorizations (Smart Lock)<br><small>Requires publishing authorization entries and the authorization log.</small>", _preferences->getBool(preference_auth_activity_enabled, false), "");
     printCheckBox(&response, "AUTHENA", "Modify and delete authorization entries", _preferences->getBool(preference_auth_control_enabled), "");
     printCheckBox(&response, "PUBAUTH", "Publish authorization log", _preferences->getBool(preference_publish_authdata), "");
     printCheckBox(&response, "SAVELOGNUM", "Save auth log number to flash", _preferences->getBool(preference_save_log_num), "");
@@ -6457,6 +6462,8 @@ esp_err_t WebCfgServer::buildInfoHtml(PsychicRequest *request, PsychicResponse* 
     response.print(_preferences->getBool(preference_auth_topic_per_entry, false) ? "Yes" : "No");
     response.print("\nMax authorization entries to retrieve: ");
     response.print(_preferences->getInt(preference_auth_max_entries, MAX_AUTH));
+    response.print("\nLog-only authorization activity diagnostics: ");
+    response.print(_preferences->getBool(preference_auth_activity_enabled, false) ? "Yes" : "No");
     response.print("\n\n------------ HOME ASSISTANT ------------");
     response.print("\nHome Assistant auto discovery enabled: ");
     if(_preferences->getBool(preference_mqtt_hass_enabled, false) && _preferences->getString(preference_mqtt_hass_discovery, "").length() > 0)

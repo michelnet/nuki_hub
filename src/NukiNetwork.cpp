@@ -777,6 +777,7 @@ bool NukiNetwork::reconnect(bool force)
         {
             Log->println("MQTT connected");
             _mqttConnectedTs = espMillis();
+            ++_mqttConnectionGeneration;
             _mqttConnectionState = 1;
             espDelayAck(100);
             _device->mqttOnMessage(onMqttDataReceivedCallback);
@@ -1398,6 +1399,11 @@ const bool NukiNetwork::mqttRecentlyConnected() const
     return _mqttConnectedTs != -1 && (millis() - _mqttConnectedTs < 6000);
 }
 
+uint32_t NukiNetwork::mqttConnectionGeneration() const
+{
+    return _mqttConnectionGeneration.load();
+}
+
 const bool NukiNetwork::pathEquals(const char* prefix, const char* path, const char* referencePath)
 {
     char prefixedPath[500];
@@ -1499,10 +1505,11 @@ void NukiNetwork::publishHassTopic(const String& mqttDeviceType,
                                    const String& stateClass,
                                    const String& entityCat,
                                    const String& commandTopic,
-                                   std::vector<std::pair<char*, char*>> additionalEntries
+                                   std::vector<std::pair<char*, char*>> additionalEntries,
+        bool includeAvailability
                                   )
 {
-    _hadiscovery->publishHassTopic(mqttDeviceType, mqttDeviceName, uidString, uidStringPostfix, displayName, name, baseTopic, stateTopic, deviceType, deviceClass, stateClass, entityCat, commandTopic, additionalEntries);
+    _hadiscovery->publishHassTopic(mqttDeviceType, mqttDeviceName, uidString, uidStringPostfix, displayName, name, baseTopic, stateTopic, deviceType, deviceClass, stateClass, entityCat, commandTopic, additionalEntries, includeAvailability);
 }
 
 void NukiNetwork::removeHassTopic(const String& mqttDeviceType, const String& mqttDeviceName, const String& uidString)

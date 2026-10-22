@@ -23,7 +23,8 @@ public:
                           const String& stateClass = "",
                           const String& entityCat = "",
                           const String& commandTopic = "",
-                          std::vector<std::pair<char*, char*>> additionalEntries = {}
+                          std::vector<std::pair<char*, char*>> additionalEntries = {},
+                          bool includeAvailability = true
                          );
 private:
     void publishHASSConfig(char *deviceType, const char *baseTopic, char *name, char *uidString, const char *softwareVersion, const char *hardwareVersion, const bool& hasDoorSensor, const bool& hasKeypad, const bool& publishAuthData, char *lockAction, char *unlockAction, char *openAction);
@@ -53,7 +54,8 @@ private:
                                 const String& stateClass = "",
                                 const String& entityCat = "",
                                 const String& commandTopic = "",
-                                std::vector<std::pair<char*, char*>> additionalEntries = {}
+                                std::vector<std::pair<char*, char*>> additionalEntries = {},
+                          bool includeAvailability = true
                                );
 
     NetworkDevice* _device = nullptr;

@@ -6,6 +6,7 @@
 #include "Logger.h"
 #include "RestartReason.h"
 #include <ArduinoJson.h>
+#include <algorithm>
 #include <ctype.h>
 #include "hal/wdt_hal.h"
 #include "util/NukiHelper.h"
@@ -54,6 +55,31 @@ void NukiNetworkLock::initialize()
     _disableNonJSON = _preferences->getBool(preference_disable_non_json, false);
     _hybridRebootOnDisconnect = _preferences->getBool(preference_hybrid_reboot_on_disconnect, false);
     _isUltra = _preferences->getBool(preference_lock_gemini_enabled, false);
+
+    _activityDeviceId = _preferences->getUInt(preference_nuki_id_lock, 0);
+    _activityDiscoveryPrefix = _preferences->getString(preference_mqtt_hass_discovery, "");
+    _activityMqttPath = _mqttPath;
+    if(_preferences->isKey(preference_lock_auth_activity_ids))
+    {
+        const String saved = _preferences->getString(preference_lock_auth_activity_ids, "");
+        JsonDocument registry;
+        if(saved.length() <= 4096 && !deserializeJson(registry, saved) &&
+                registry["deviceId"].is<uint32_t>() && registry["discoveryPrefix"].is<const char*>() &&
+                registry["mqttPath"].is<const char*>() && registry["ids"].is<JsonArray>() &&
+                registry["ids"].size() <= 100)
+        {
+            _activityDeviceId = registry["deviceId"].as<uint32_t>();
+            _activityDiscoveryPrefix = registry["discoveryPrefix"].as<String>();
+            _activityMqttPath = registry["mqttPath"].as<String>();
+            for(const auto id : registry["ids"].as<JsonArray>())
+            {
+                if(id.is<uint32_t>() && id.as<uint32_t>() != 0 && id.as<uint32_t>() != UINT32_MAX)
+                {
+                    _activityDiscoveryIds.insert(id.as<uint32_t>());
+                }
+            }
+        }
+    }
 
     _network->initTopic(_mqttPath, mqtt_topic_lock_action, "--");
     _network->subscribe(_mqttPath, mqtt_topic_lock_action);
@@ -650,11 +676,172 @@ void NukiNetworkLock::publishAvailability(const bool available)
     _nukiPublisher->publishString(mqtt_topic_lock_availability, available ? "online" : "offline", true);
 }
 
+void NukiNetworkLock::saveAuthorizationActivityIds()
+{
+    if(_activityDiscoveryIds.empty())
+    {
+        _preferences->remove(preference_lock_auth_activity_ids);
+        return;
+    }
+
+    JsonDocument registry;
+    registry["deviceId"] = _activityDeviceId;
+    registry["discoveryPrefix"] = _activityDiscoveryPrefix;
+    registry["mqttPath"] = _activityMqttPath;
+    JsonArray ids = registry["ids"].to<JsonArray>();
+    for(const auto authorizationId : _activityDiscoveryIds)
+    {
+        ids.add(authorizationId);
+    }
+    String saved;
+    serializeJson(registry, saved);
+    _preferences->putString(preference_lock_auth_activity_ids, saved);
+}
+
+void NukiNetworkLock::removeAuthorizationActivity(uint32_t authorizationId)
+{
+    char uidString[20];
+    ultoa(_activityDeviceId, uidString, 16);
+    const std::string entityName = "auth_activity_" + std::to_string(authorizationId);
+    const std::string topic = std::string(mqtt_topic_auth_activity) + "/" + std::to_string(authorizationId);
+    const String discoveryTopic = String("/sensor/") + uidString + "/" + entityName.c_str() + "/config";
+    _network->removeTopic(_activityDiscoveryPrefix, discoveryTopic);
+    _network->removeTopic(_activityMqttPath, topic.c_str());
+}
+
+void NukiNetworkLock::updateAuthorizationActivity()
+{
+    if(espMillis() >= _nextActivityConfigCheck)
+    {
+        _nextActivityConfigCheck = espMillis() + 5000;
+        refreshAuthorizationActivity();
+    }
+
+    const uint32_t generation = _network->mqttConnectionGeneration();
+    if(_network->mqttConnectionState() == 2 && generation != _activityMqttGeneration &&
+            _activityEnabled && _activityHassReady)
+    {
+        for(const auto& activity : _authorizationActivity.entries())
+        {
+            publishAuthorizationActivity(activity.second);
+        }
+        _activityMqttGeneration = generation;
+    }
+}
+
+void NukiNetworkLock::refreshAuthorizationActivity()
+{
+    const String discoveryPrefix = _preferences->getString(preference_mqtt_hass_discovery, "");
+    const bool enabled = _preferences->getBool(preference_mqtt_hass_enabled, false) && discoveryPrefix != "" &&
+                         _preferences->getBool(preference_auth_activity_enabled, false) &&
+                         _preferences->getBool(preference_auth_info_enabled, false) &&
+                         _preferences->getBool(preference_publish_authdata, false);
+    const uint32_t deviceId = _preferences->getUInt(preference_nuki_id_lock, 0);
+    const bool identityChanged = _activityDeviceId != deviceId || _activityDiscoveryPrefix != discoveryPrefix ||
+                                 _activityMqttPath != String(_mqttPath);
+    const bool connected = _network->mqttConnectionState() == 2;
+    const size_t maxEntries = (size_t)std::max<int32_t>(1, std::min<int32_t>(100, _preferences->getInt(preference_auth_max_entries, MAX_AUTH)));
+    bool changed = false;
+
+    if(connected)
+    {
+        for(auto id = _activityDiscoveryIds.begin(); id != _activityDiscoveryIds.end();)
+        {
+            if(!enabled || identityChanged || _authorizationActivity.isListed(*id) ||
+                    _activityDiscoveryIds.size() > maxEntries)
+            {
+                removeAuthorizationActivity(*id);
+                id = _activityDiscoveryIds.erase(id);
+                changed = true;
+            }
+            else
+            {
+                ++id;
+            }
+        }
+        if(changed)
+        {
+            saveAuthorizationActivityIds();
+        }
+    }
+
+    if(!enabled || identityChanged)
+    {
+        _authorizationActivity.clear();
+        _activityEnabled = false;
+        if(!_activityDiscoveryIds.empty())
+        {
+            return; // Retry retained discovery cleanup after MQTT reconnects.
+        }
+        _activityDeviceId = deviceId;
+        _activityDiscoveryPrefix = discoveryPrefix;
+        _activityMqttPath = _mqttPath;
+    }
+
+    if(enabled && !_activityEnabled)
+    {
+        _queryCommands |= QUERY_COMMAND_CONFIG;
+    }
+    _activityEnabled = enabled;
+}
+
+void NukiNetworkLock::publishAuthorizationActivity(const AuthorizationActivity::Entry& entry)
+{
+    if(!_activityEnabled || !_activityHassReady || !_authorizationActivity.listReceived() ||
+            _network->mqttConnectionState() != 2)
+    {
+        return;
+    }
+
+    const size_t maxEntries = (size_t)std::max<int32_t>(1, std::min<int32_t>(100, _preferences->getInt(preference_auth_max_entries, MAX_AUTH)));
+    if(_activityDiscoveryIds.count(entry.authorizationId) == 0 && _activityDiscoveryIds.size() >= maxEntries)
+    {
+        return;
+    }
+
+    const std::string entityName = "auth_activity_" + std::to_string(entry.authorizationId);
+    const std::string postfix = "_" + entityName;
+    const std::string displayName = "Authorization activity - " + std::to_string(entry.authorizationId);
+    const std::string topic = std::string(mqtt_topic_auth_activity) + "/" + std::to_string(entry.authorizationId);
+    const std::string stateTopic = "~" + topic;
+    char uidString[20];
+    ultoa(_activityDeviceId, uidString, 16);
+
+    _network->publishHassTopic("sensor", entityName.c_str(), uidString, postfix.c_str(),
+                             displayName.c_str(), _nukiName, _mqttPath, stateTopic.c_str(),
+                             "SmartLock", "", "", "diagnostic", "",
+    {
+        { (char*)"json_attr_t", (char*)stateTopic.c_str() },
+        { (char*)"val_tpl", (char*)"{{ value_json.lastAction }}" },
+        { (char*)"ic", (char*)"mdi:account-clock" }
+    }, false);
+
+    JsonDocument json;
+    json["authId"] = entry.authorizationId;
+    json["name"] = entry.name;
+    json["dateLastActive"] = entry.dateLastActive;
+    json["lastAction"] = entry.action;
+    json["trigger"] = entry.trigger;
+    json["completionStatus"] = entry.completionStatus;
+    json["logIndex"] = entry.index;
+    json["source"] = "log";
+    std::string payload;
+    serializeJson(json, payload);
+    _nukiPublisher->publishString(topic.c_str(), payload, true);
+
+    // Persist only discovery membership, not every activity, to limit flash writes.
+    if(_activityDiscoveryIds.insert(entry.authorizationId).second)
+    {
+        saveAuthorizationActivityIds();
+    }
+}
+
 void NukiNetworkLock::publishAuthorizationInfo(const std::list<NukiLock::LogEntry>& logEntries, bool latest)
 {
     char str[50];
     char authName[33];
     uint32_t authIndex = 0;
+    std::set<uint32_t> changedActivityIds;
 
     JsonDocument json;
 
@@ -793,6 +980,33 @@ void NukiNetworkLock::publishAuthorizationInfo(const std::list<NukiLock::LogEntr
             break;
         }
 
+        if(_activityEnabled && log.loggingType == NukiLock::LoggingType::LockAction &&
+                log.data[1] != (uint8_t)NukiLock::Trigger::Manual &&
+                log.data[1] != (uint8_t)NukiLock::Trigger::Button &&
+                log.data[1] != (uint8_t)NukiLock::Trigger::Automatic &&
+                log.data[1] != (uint8_t)NukiLock::Trigger::AutoLock)
+        {
+            AuthorizationActivity::Entry activity;
+            activity.authorizationId = log.authId;
+            activity.index = log.index;
+            activity.name = entry["authorizationName"].as<std::string>();
+            char dateLastActive[32];
+            snprintf(dateLastActive, sizeof(dateLastActive), "%04u-%02u-%02u %02u:%02u:%02u",
+                     (unsigned)log.timeStampYear, (unsigned)log.timeStampMonth, (unsigned)log.timeStampDay,
+                     (unsigned)log.timeStampHour, (unsigned)log.timeStampMinute, (unsigned)log.timeStampSecond);
+            activity.dateLastActive = dateLastActive;
+            activity.action = entry["action"].as<std::string>();
+            activity.trigger = entry["trigger"].as<std::string>();
+            activity.completionStatus = entry["completionStatus"].as<std::string>();
+
+            const size_t maxEntries = (size_t)std::max<int32_t>(1, std::min<int32_t>(100, _preferences->getInt(preference_auth_max_entries, MAX_AUTH)));
+            if((_activityDiscoveryIds.count(log.authId) != 0 || _activityDiscoveryIds.size() < maxEntries) &&
+                    _authorizationActivity.observe(activity, maxEntries))
+            {
+                changedActivityIds.insert(activity.authorizationId);
+            }
+        }
+
         if(log.index > _lastRollingLog && !(_lastRollingLog == 0 && !_lastRollingLogReceived && espMillis() < 60000))
         {
             _lastRollingLog = log.index;
@@ -803,6 +1017,11 @@ void NukiNetworkLock::publishAuthorizationInfo(const std::list<NukiLock::LogEntr
             _nukiPublisher->publishString(mqtt_topic_lock_log_rolling, _buffer, false);
             _nukiPublisher->publishInt(mqtt_topic_lock_log_rolling_last, log.index, true);
         }
+    }
+
+    for(const auto authorizationId : changedActivityIds)
+    {
+        publishAuthorizationActivity(_authorizationActivity.entries().at(authorizationId));
     }
 
     std::string jsonString;
@@ -1399,6 +1618,29 @@ void NukiNetworkLock::publishTimeControl(const std::list<NukiLock::TimeControlEn
 
 void NukiNetworkLock::publishAuth(const std::list<NukiLock::AuthorizationEntry>& authEntries, uint maxAuthEntryCount)
 {
+    std::set<uint32_t> listed;
+    for(const auto& entry : authEntries)
+    {
+        listed.insert(entry.authId);
+    }
+    _authorizationActivity.updateListed(listed);
+    if(_network->mqttConnectionState() == 2)
+    {
+        bool changed = false;
+        for(const auto authorizationId : listed)
+        {
+            if(_activityDiscoveryIds.erase(authorizationId) != 0)
+            {
+                removeAuthorizationActivity(authorizationId);
+                changed = true;
+            }
+        }
+        if(changed)
+        {
+            saveAuthorizationActivityIds();
+        }
+    }
+
     uint index = 0;
     char str[50];
     char uidString[20];
@@ -1537,6 +1779,14 @@ void NukiNetworkLock::publishAuth(const std::list<NukiLock::AuthorizationEntry>&
     std::string jsonString;
     serializeJson(json, jsonString);
     _nukiPublisher->publishString(mqtt_topic_auth_json, jsonString, true);
+
+    if(_activityEnabled)
+    {
+        for(const auto& activity : _authorizationActivity.entries())
+        {
+            publishAuthorizationActivity(activity.second);
+        }
+    }
 
     for(int j=authEntries.size(); j<maxAuthEntryCount; j++)
     {
@@ -1693,7 +1943,14 @@ const uint8_t NukiNetworkLock::queryCommands()
 
 void NukiNetworkLock::setupHASS(int type, uint32_t nukiId, char* nukiName, const char* firmwareVersion, const char* hardwareVersion, bool hasDoorSensor, bool hasKeypad)
 {
+    strncpy(_nukiName, nukiName, sizeof(_nukiName) - 1);
+    _nukiName[sizeof(_nukiName) - 1] = '\0';
     _network->setupHASS(type, nukiId, nukiName, firmwareVersion, hardwareVersion, hasDoorSensor, hasKeypad);
+    _activityHassReady = true;
+    for(const auto& activity : _authorizationActivity.entries())
+    {
+        publishAuthorizationActivity(activity.second);
+    }
 }
 
 

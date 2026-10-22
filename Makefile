@@ -8,6 +8,12 @@ UPDATER_BOARDS := $(shell grep -oP '(?<=\[env:)[^\]]+' $(PLATFORMIO_INI) | grep 
 .PHONY: default
 default: esp32
 
+.PHONY: test-host
+test-host:
+	mkdir -p .pio/build/host
+	$(CXX) -std=c++11 -Wall -Wextra -Werror -pedantic -Isrc test/authorization_activity_test.cpp -o .pio/build/host/authorization_activity_test
+	.pio/build/host/authorization_activity_test
+
 .PHONY: release
 release: $(BOARDS)
 

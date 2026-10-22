@@ -454,6 +454,7 @@ void NukiWrapper::checkQueries(const int64_t& ts, const uint8_t& queryCommands)
 
 void NukiWrapper::update(bool reboot)
 {
+    _network->updateAuthorizationActivity();
     wdt_hal_context_t rtc_wdt_ctx = RWDT_HAL_CONTEXT_DEFAULT();
     wdt_hal_write_protect_disable(&rtc_wdt_ctx);
     wdt_hal_feed(&rtc_wdt_ctx);

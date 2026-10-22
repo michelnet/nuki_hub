@@ -324,6 +324,7 @@ Note: All of the following requires the Nuki security code / PIN to be set, see 
 - Publish timecontrol information: Enable to publish information about timecontrol entries through MQTT, see the "[Timecontrol](#timecontrol)" section of this README
 - Add, modify and delete timecontrol entries: Enable to allow configuration of timecontrol entries through MQTT, see the "[Timecontrol](#timecontrol)" section of this README
 - Publish authorization information: Enable to publish information about authorization entries through MQTT, see the "[Authorization](#authorization)" section of this README
+- Create HA activity diagnostics for log-only authorizations (Smart Lock): Optionally create read-only diagnostic sensors for named authorizations found in the activity log but absent from the current authorization list. Requires publishing authorization entries, publishing the authorization log and Home Assistant discovery.
 - Modify and delete authorization entries: Enable to allow configuration of authorization entries through MQTT, see the "[Authorization](#authorization)" section of this README
 - Publish authorization log: Enable to publish authorization data to the MQTT topic lock/log
 - Save auth log number to flash: Enable to save the highest Nuki lock and/or opener auth log number to flash on change. Prevents duplicates in the rolling log but slightly increases flash wear.
@@ -912,6 +913,26 @@ To change Nuki Lock/Opener authorization settings set the `[lock/opener]/authori
 Examples:
 - Delete: `{ "action": "delete", "authId": "1234" }`
 - Update: `{ "action": "update", "authId": "1234", "enabled": "1", "name": "Test", "timeLimited": "1", "allowedFrom": "2024-04-12 10:00:00", "allowedUntil": "2034-04-12 10:00:00", "allowedWeekdays": [ "mon", "tue", "sat", "sun" ], "allowedFromTime": "08:00", "allowedUntilTime": "16:00" }`
+
+### Log-only authorization diagnostics (Smart Lock)
+
+Some setups have named users in the activity log that are absent from the authorization list returned by the lock. To display their activity on the existing Home Assistant Smart Lock device, enable **Create HA activity diagnostics for log-only authorizations (Smart Lock)** under **Access Level Configuration**. This option is disabled by default. Also enable **Publish authorization entries information**, **Publish authorization log** and Home Assistant discovery.
+
+After saving, Nuki Hub requests a fresh configuration. A sensor appears once both the authorization list and a named lock-action log entry have been received. If the user is absent from the recent log, perform a lock action using that user's Nuki app. Manual operations, button presses, automatic locking, keypad events and unnamed/reserved authorizations do not create these sensors.
+
+Each sensor is named `Authorization activity - <authId>`, with a stable identity based on that authorization ID. Its state is the last logged action. The retained MQTT topic `<MQTT Nuki Hub Path>/lock/authorization/activity/<authId>` contains these attributes:
+
+| Attribute | Meaning |
+|-----------|---------|
+| `authId`, `name` | The authorization ID and name reported in the log |
+| `dateLastActive` | The logged local date and time; no UTC offset is supplied by the lock |
+| `lastAction`, `trigger`, `completionStatus` | The last logged action, its trigger and result |
+| `logIndex` | The latest observed log index for this authorization |
+| `source` | Always `log` |
+
+These historical sensors stay readable while the hub or lock is offline. They do not expose an enable/disable switch, `remoteAllowed` or a total `lockCount`, because the log does not provide those authorization settings. A historical activity record does not establish that the authorization still grants access.
+
+Repeated or older log entries do not replace a newer observation. At most **Max authorization entries** additional sensors are discovered (default 10). Retained discovery and activity topics are removed when this option or a required publication option is disabled, or when the authorization appears in the regular list. Discovery IDs and their topic prefixes are saved only when sensor membership changes, so ordinary activity updates do not write to flash. On the same broker, previous topic prefixes are cleaned up automatically after reconfiguration. When moving to a different broker, clean up the old broker before disconnecting it.
 
 ## GPIO lock control (optional)
 

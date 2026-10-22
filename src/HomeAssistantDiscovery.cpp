@@ -3060,13 +3060,14 @@ void HomeAssistantDiscovery::publishHassTopic(const String& mqttDeviceType,
         const String& stateClass,
         const String& entityCat,
         const String& commandTopic,
-        std::vector<std::pair<char*, char*>> additionalEntries
+        std::vector<std::pair<char*, char*>> additionalEntries,
+        bool includeAvailability
                                              )
 {
     if (_preferences->getString(preference_mqtt_hass_discovery, "") != "")
     {
         JsonDocument json;
-        json = createHassJson(uidString, uidStringPostfix, displayName, name, baseTopic, stateTopic, deviceType, deviceClass, stateClass, entityCat, commandTopic, additionalEntries);
+        json = createHassJson(uidString, uidStringPostfix, displayName, name, baseTopic, stateTopic, deviceType, deviceClass, stateClass, entityCat, commandTopic, additionalEntries, includeAvailability);
         serializeJson(json, _buffer, _bufferSize);
         String path = createHassTopicPath(mqttDeviceType, mqttDeviceName, uidString);
         _device->mqttPublish(path.c_str(), MQTT_QOS_LEVEL, true, _buffer);
@@ -3213,7 +3214,8 @@ JsonDocument HomeAssistantDiscovery::createHassJson(const String& uidString,
         const String& stateClass,
         const String& entityCat,
         const String& commandTopic,
-        std::vector<std::pair<char*, char*>> additionalEntries
+        std::vector<std::pair<char*, char*>> additionalEntries,
+        bool includeAvailability
                                                    )
 {
     JsonDocument json;
@@ -3253,7 +3255,7 @@ JsonDocument HomeAssistantDiscovery::createHassJson(const String& uidString,
 
     json["dev"]["name"] = _uidToName[uidString];
 
-    if (displayName != "Rolling authorization log")
+    if (includeAvailability && displayName != "Rolling authorization log")
     {
         json["avty"][0]["t"] = _baseTopic + mqtt_topic_mqtt_connection_state;
 

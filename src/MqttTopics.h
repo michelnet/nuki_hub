@@ -92,6 +92,7 @@
 #define mqtt_topic_auth (char*)"/authorization"
 #define mqtt_topic_auth_entries (char*)"/authorization/entries"
 #define mqtt_topic_auth_json (char*)"/authorization/json"
+#define mqtt_topic_auth_activity (char*)"/authorization/activity"
 #define mqtt_topic_auth_action (char*)"/authorization/action"
 #define mqtt_topic_auth_command_result (char*)"/authorization/commandResult"
 

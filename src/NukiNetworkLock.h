@@ -16,6 +16,7 @@
 #include "NukiPublisher.h"
 #include "EspMillis.h"
 #include "DoorSensorOverride.h"
+#include "AuthorizationActivity.h"
 
 class NukiNetworkLock : public MqttReceiver
 {
@@ -25,6 +26,8 @@ public:
 
     void initialize();
     bool update();
+    // Called only by NukiWrapper on the Nuki task, alongside log/list publication.
+    void updateAuthorizationActivity();
 
     void publishKeyTurnerState(const NukiLock::KeyTurnerState& keyTurnerState, const NukiLock::KeyTurnerState& lastKeyTurnerState);
     void publishAvailability(const bool available);
@@ -73,6 +76,10 @@ private:
     const bool comparePrefixedPath(const char* fullPath, const char* subPath);
 
     void publishKeypadEntry(const String topic, NukiLock::KeypadEntry entry);
+    void refreshAuthorizationActivity();
+    void publishAuthorizationActivity(const AuthorizationActivity::Entry& entry);
+    void removeAuthorizationActivity(uint32_t authorizationId);
+    void saveAuthorizationActivityIds();
 
     void (*_officialUpdateReceivedCallback)(const char* path, const char* value) = nullptr;
 
@@ -86,6 +93,15 @@ private:
     Preferences* _preferences = nullptr;
 
     std::map<uint32_t, String> _authEntries;
+    AuthorizationActivity _authorizationActivity;
+    std::set<uint32_t> _activityDiscoveryIds;
+    uint32_t _activityDeviceId = 0;
+    String _activityDiscoveryPrefix;
+    String _activityMqttPath;
+    int64_t _nextActivityConfigCheck = 0;
+    bool _activityEnabled = false;
+    bool _activityHassReady = false;
+    uint32_t _activityMqttGeneration = 0;
     char _mqttPath[181] = {0};
 
     bool _firstTunerStatePublish = true;
@@ -110,7 +126,7 @@ private:
     int64_t _offLastConnected = 0;
     DoorSensorOverride _requestDoorSensorOverride = DoorSensorOverride::NoOverride;
 
-    char _nukiName[33];
+    char _nukiName[33] = {};
     char _authName[33];
 
     char* _buffer;

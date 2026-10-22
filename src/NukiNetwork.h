@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 
 #include <Preferences.h>
 #include <vector>
@@ -86,12 +87,14 @@ public:
                           const String& stateClass,
                           const String& entityCat,
                           const String& commandTopic,
-                          std::vector<std::pair<char*, char*>> additionalEntries
+                          std::vector<std::pair<char*, char*>> additionalEntries,
+                          bool includeAvailability = true
                          );
     void removeHassTopic(const String& mqttDeviceType, const String& mqttDeviceName, const String& uidString);
 
     const int mqttConnectionState() const;  // 0 = not connected; 1 = connected; 2 = connected and mqtt processed
     const bool mqttRecentlyConnected() const;
+    uint32_t mqttConnectionGeneration() const;
     const bool pathEquals(const char* prefix, const char* path, const char* referencePath);
     const uint16_t subscribe(const char* topic, uint8_t qos);
     void addReconnectedCallback(std::function<void()> reconnectedCallback);
@@ -144,6 +147,7 @@ private:
     int _mqttConnectCounter = 0;
     int _mqttPort = 1883;
     long _mqttConnectedTs = -1;
+    std::atomic<uint32_t> _mqttConnectionGeneration {0};
     long _overwriteNukiHubConfigTS = -1;
     bool _connectReplyReceived = false;
     bool _firstDisconnected = true;
